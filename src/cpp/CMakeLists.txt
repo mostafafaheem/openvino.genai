@@ -101,6 +101,11 @@ FetchContent_Declare(safetensors.h
     URL_HASH SHA256=9aaf5961609601cf9aaa96582a207bce7c6e5fbf57ed2cc669bb7bde6a937d4b)
 FetchContent_MakeAvailable(safetensors.h)
 
+option(ENABLE_GGUF_V2 "Enable GGUFReaderV2 dynamic graph translation (requires ENABLE_GGUF)" OFF)
+if(ENABLE_GGUF_V2 AND NOT ENABLE_GGUF)
+    message(FATAL_ERROR "ENABLE_GGUF_V2 requires ENABLE_GGUF=ON")
+endif()
+
 if(ENABLE_GGUF)
     FetchContent_Declare(
       gguflib
@@ -112,6 +117,27 @@ if(ENABLE_GGUF)
     add_library(gguflib STATIC ${gguflib_SOURCE_DIR}/fp16.c ${gguflib_SOURCE_DIR}/gguflib.c)
     set_target_properties(gguflib PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_include_directories(gguflib PUBLIC "${gguflib_SOURCE_DIR}")
+    if(ENABLE_GGUF_V2)
+        target_compile_definitions(gguflib PUBLIC gguf_get_key=gguflib_get_key) # temporary workaround for symbol collision
+    endif()
+    find_package(llama QUIET)
+    if(llama_FOUND)
+        message(STATUS "Found local llama.cpp")
+    else()
+        message(STATUS "llama.cpp not found locally, fetching from GitHub...")
+        FetchContent_Declare(
+            llama.cpp
+            GIT_REPOSITORY https://github.com/ravi9/llama.cpp.git
+            GIT_TAG dev_backend_openvino
+            GIT_SHALLOW TRUE
+        )
+
+        set(LLAMA_BUILD_TESTS OFF CACHE BOOL "Disable llama.cpp tests" FORCE)
+        set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "Disable llama.cpp examples" FORCE)
+        set(LLAMA_BUILD_SERVER OFF CACHE BOOL "Disable llama.cpp server" FORCE)
+        set(GGML_OPENVINO ON CACHE BOOL "Enable llama.cpp OpenVINO backend" FORCE)
+        FetchContent_MakeAvailable(llama.cpp)
+    endif()
 endif()
 
 # Disable XGrammar for Android platform, causes issues in CI
@@ -177,8 +203,12 @@ if(NOT ENABLE_GGUF)
     set(GGUF_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/gguf_utils/gguf.cpp
                      ${CMAKE_CURRENT_SOURCE_DIR}/src/gguf_utils/gguf_quants.cpp
                      ${CMAKE_CURRENT_SOURCE_DIR}/src/gguf_utils/gguf_modeling.cpp
-                     ${CMAKE_CURRENT_SOURCE_DIR}/src/gguf_utils/building_blocks.cpp)
+                     ${CMAKE_CURRENT_SOURCE_DIR}/src/gguf_utils/building_blocks.cpp
+                     ${CMAKE_CURRENT_SOURCE_DIR}/src/gguf_utils/gguf_dynamic_reader.cpp)
     list(REMOVE_ITEM SOURCE_FILES ${GGUF_SOURCES})
+elseif(NOT ENABLE_GGUF_V2)
+    set(GGUF_V2_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/gguf_utils/gguf_dynamic_reader.cpp)
+    list(REMOVE_ITEM SOURCE_FILES ${GGUF_V2_SOURCES})
 endif()
 
 set(TARGET_NAME openvino_genai)
@@ -197,7 +227,23 @@ endif()
 
 if(ENABLE_GGUF)
     target_link_libraries(${TARGET_NAME_OBJ} PRIVATE gguflib)
+    if(ENABLE_GGUF_V2)
+        target_link_libraries(${TARGET_NAME_OBJ} PRIVATE llama)
+    endif()
     target_compile_definitions(${TARGET_NAME_OBJ} PRIVATE ENABLE_GGUF)
+    if(ENABLE_GGUF_V2)
+        target_compile_definitions(${TARGET_NAME_OBJ} PRIVATE ENABLE_GGUF_V2)
+        set(LLAMA_SRC_DIR "${llama.cpp_SOURCE_DIR}")
+        if(NOT LLAMA_SRC_DIR)
+            set(LLAMA_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../llama.cpp") # temporary fallback path for local development
+        endif()
+        
+        target_include_directories(${TARGET_NAME_OBJ} SYSTEM PRIVATE
+            "${LLAMA_SRC_DIR}/ggml/src" # for ggml-openvino/utils.h, ggml-decoder.h
+            "${LLAMA_SRC_DIR}/ggml/src/ggml-openvino" # for direct includes within OV backend
+            "${LLAMA_SRC_DIR}/include" # for llama.h public API
+        )
+    endif()
 endif()
 
 target_include_directories(${TARGET_NAME_OBJ} SYSTEM PRIVATE "${safetensors.h_SOURCE_DIR}")
@@ -263,6 +309,9 @@ endif()
 
 if(ENABLE_GGUF)
   target_link_libraries(${TARGET_NAME} PRIVATE gguflib)
+  if(ENABLE_GGUF_V2)
+    target_link_libraries(${TARGET_NAME} PRIVATE llama)
+  endif()
 endif()
 
 target_compile_features(${TARGET_NAME} INTERFACE cxx_std_17)

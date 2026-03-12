@@ -37,6 +37,11 @@ if(ENABLE_SYSTEM_OPENCL)
     endif()
 endif()
 
+if(ENABLE_GGUF_V2)
+    find_package(llama QUIET)
+    target_link_libraries(${TEST_TARGET_NAME} PRIVATE llama)
+endif()
+
 target_include_directories(${TEST_TARGET_NAME} PRIVATE "${OpenVINOGenAI_SOURCE_DIR}/src/cpp/src"
                                                        $<TARGET_PROPERTY:openvino::genai,INTERFACE_INCLUDE_DIRECTORIES>)
 
