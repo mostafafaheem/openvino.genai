@@ -6,6 +6,7 @@
 #include <variant>
 #include <fstream>
 #include <memory>
+#include <sstream>
 
 #include "openvino/op/add.hpp"
 #include "openvino/op/divide.hpp"
@@ -17,6 +18,7 @@
 #include "openvino/op/transpose.hpp"
 #include "openvino/genai/text_streamer.hpp"
 #include "gguf_utils/gguf_modeling.hpp"
+#include "gguf_utils/gguf_dynamic_reader.hpp"
 
 
 #include "sampling/sampler.hpp"
@@ -404,6 +406,24 @@ std::shared_ptr<ov::Model> read_model(const std::filesystem::path& model_dir,  c
     auto [filtered_properties, enable_save_ov_model] = extract_gguf_properties(properties);
     if (is_gguf_model(model_dir)) {
 #ifdef ENABLE_GGUF
+#ifdef ENABLE_GGUF_V2
+        const char* reader_override = std::getenv("OPENVINO_GENAI_GGUF_READER");
+        bool force_v1 = reader_override && std::string(reader_override) == "v1";
+        bool force_v2 = reader_override && std::string(reader_override) == "v2";
+
+        if (!force_v1) {
+            try {
+                return create_from_gguf_v2(model_dir.string(), enable_save_ov_model);
+            } catch (const std::exception& e) {
+                if (force_v2) {
+                    throw;
+                }
+                std::stringstream ss;
+                ss << "GGUFReaderV2 failed, falling back to V1: " << e.what();
+                ov::genai::utils::print_gguf_debug_info(ss.str());
+            }
+        }
+#endif  // ENABLE_GGUF_V2
         return create_from_gguf(model_dir.string(), enable_save_ov_model);
 #else
         OPENVINO_ASSERT("GGUF support is switched off. Please, recompile with 'cmake -DENABLE_GGUF=ON'");
