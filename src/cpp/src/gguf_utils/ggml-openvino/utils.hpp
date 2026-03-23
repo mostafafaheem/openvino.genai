@@ -1,5 +1,5 @@
 #include "ggml-backend-impl.h"
-#include "ggml-decoder.h"
+#include "ggml-decoder.hpp"
 #include "ggml-impl.h"
 
 #include <algorithm>
@@ -61,6 +61,8 @@ struct ov_runtime_context {
 };
 
 enum ggml_status ov_graph_compute(struct ggml_cgraph * cgraph, ggml_backend_t backend);
+
+void ggml_backend_openvino_set_export_target(std::shared_ptr<ov::Model>* target);
 
 enum ggml_status ov_graph_compute_dynamic(struct ggml_cgraph * cgraph, std::shared_ptr<ov_runtime_context> r_ctx);
 enum ggml_status ov_graph_compute_static(struct ggml_cgraph * cgraph, std::shared_ptr<ov_runtime_context> r_ctx);

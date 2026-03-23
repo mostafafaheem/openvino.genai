@@ -17,8 +17,6 @@
 // ExtraQuantType enum - defines requantization target formats
 enum class ExtraQuantType { F16, Q4_0_C, Q8_1_C, Q4_0_128, Q8_0_C, Q8_0_32 };
 
-ov::Core & ov_singleton_core();
-
 // Get the remote context for the current device (returns empty optional for CPU)
 std::optional<ov::RemoteContext> ggml_openvino_get_remote_context();
 

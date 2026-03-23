@@ -1,12 +1,12 @@
 #pragma once
-#include "ggml-openvino-extra.h"  // For ExtraQuantType
+#include "ggml-openvino-extra.hpp"  // For ExtraQuantType
 #include "ggml.h"
 
 #include <cstdint>
 #include <openvino/op/constant.hpp>
 #include <openvino/runtime/tensor.hpp>
 
-void unpack_32_4(const uint8_t* data, uint8_t* dst);
+
 
 void extract_q4_0_data(const ggml_tensor * tensor,
                        ov::Tensor & weights_arr,
@@ -24,7 +24,7 @@ void extract_q8_0_data(const ggml_tensor * tensor,
                        ov::Tensor & scales_arr,
                        ov::Tensor & zp_arr);
 
-void unpack_256_4(const uint8_t* data, uint8_t* dst);
+
 
 void extract_q4_k_data(const ggml_tensor * tensor,
                        ov::Tensor & weights_arr,

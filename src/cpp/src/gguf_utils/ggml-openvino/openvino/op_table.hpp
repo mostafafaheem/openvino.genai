@@ -1,6 +1,6 @@
 #pragma once
 
-#include "node_context.h"
+#include "node_context.hpp"
 
 namespace ov {
 namespace frontend {

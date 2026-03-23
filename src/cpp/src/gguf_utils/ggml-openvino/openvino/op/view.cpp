@@ -1,5 +1,5 @@
-#include "../op_table.h"
-#include "../utils.h"
+#include "../op_table.hpp"
+#include "../utils.hpp"
 #include <openvino/op/reshape.hpp>
 namespace ov {
 namespace frontend {

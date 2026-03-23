@@ -1,4 +1,4 @@
-#include "eliminate_zp.h"
+#include "eliminate_zp.hpp"
 
 #include <openvino/core/graph_util.hpp>
 #include <openvino/core/parallel.hpp>

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "input_model.h"
-#include "node_context.h"
+#include "input_model.hpp"
+#include "node_context.hpp"
 
 namespace ov {
 namespace frontend {

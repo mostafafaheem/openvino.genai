@@ -3,9 +3,9 @@
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 #include "ggml-impl.h"
-#include "ggml-openvino-extra.h"
-#include "ggml-openvino/utils.h"
-#include "ggml-quants.h"
+#include "ggml-openvino-extra.hpp"
+#include "utils.hpp"
+#include "ggml-quants.hpp"
 #include "ggml.h"
 
 #include <atomic>

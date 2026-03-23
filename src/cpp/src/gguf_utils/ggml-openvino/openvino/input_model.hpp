@@ -2,7 +2,7 @@
 
 #include <openvino/frontend/input_model.hpp>
 
-#include "decoder.h"
+#include "decoder.hpp"
 
 namespace ov {
 namespace frontend {
