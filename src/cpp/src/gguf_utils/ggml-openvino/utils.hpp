@@ -64,9 +64,6 @@ enum ggml_status ov_graph_compute(struct ggml_cgraph * cgraph, ggml_backend_t ba
 
 void ggml_backend_openvino_set_export_target(std::shared_ptr<ov::Model>* target);
 
-enum ggml_status ov_graph_compute_dynamic(struct ggml_cgraph * cgraph, std::shared_ptr<ov_runtime_context> r_ctx);
-enum ggml_status ov_graph_compute_static(struct ggml_cgraph * cgraph, std::shared_ptr<ov_runtime_context> r_ctx);
-
 size_t checksum(const void * data, size_t size);
 
 void print_input_tensor_info(const std::string & name, const ov::Tensor & tensor);

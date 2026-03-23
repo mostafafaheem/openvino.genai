@@ -43,11 +43,10 @@ private:
 
     std::shared_ptr<ov::Model> extract_ov_model();
 
-    void remap_io_names(std::shared_ptr<ov::Model>& model);
-
     std::string m_model_path;
     llama_model* m_llama_model = nullptr;
     llama_context* m_llama_ctx = nullptr;
+    std::shared_ptr<ov::Model> m_extracted_model;
 };
 
 /**

@@ -1,10 +1,10 @@
-#include "ggml-decoder.h"
+#include "ggml-decoder.hpp"
 
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
-#include "ggml-openvino-extra.h"
+#include "ggml-openvino-extra.hpp"
 #include "ggml-openvino.h"
-#include "ggml-quants.h"
+#include "ggml-quants.hpp"
 
 #include <ggml-impl.h>
 #include <ggml.h>
@@ -340,7 +340,7 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
     if (is_inp_tok(input, op) || is_inp_pos(input, op)) {
         // tokens or positions
         int len = m_is_static ? (m_is_prefill ? m_prefill_chunk_size : 1) : -1;
-        input_shape = ov::PartialShape{1, 1, 1, len};
+        input_shape = ov::PartialShape{-1, len};
 
     } else if (is_output_idx(input, op)) {
         // output index
@@ -351,7 +351,7 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
         if (m_is_static) {
             input_shape = ov::PartialShape{1, 1, m_is_prefill ? m_prefill_chunk_size : 1, m_model_params.ctx};
         } else if (m_is_stateful) {
-            input_shape = ov::PartialShape{1, 1, -1, -1};
+            input_shape = ov::PartialShape{-1, -1}; // TODO: see how you can make this work 
         } else {
             input_shape = ov::PartialShape{-1, 1, -1, -1};
         }
@@ -415,8 +415,12 @@ void GgmlOvDecoder::add_extra_inputs() {
     create_1d_input("n_seq_active", m_compute_params.n_seq_active);
     create_1d_input("seq_active_start", m_compute_params.seq_active_start);
     create_1d_input("seq_active_end", m_compute_params.seq_active_start + m_compute_params.n_seq_active);
-    create_1d_input("token_len_per_seq", m_compute_params.token_len_per_seq);
-    // create_1d_input("token_len", m_token_len_per_seq * m_n_seq_active);
+    
+    // temporarily adding beam_idx as an extra input until beam search is implemented
+    auto beam_idx = std::make_shared<ov::op::v0::Parameter>(ov::element::i32, ov::PartialShape{-1});
+    beam_idx->set_friendly_name("beam_idx");
+    beam_idx->output(0).get_tensor().set_names({"beam_idx"});
+    m_model_extra_inputs["beam_idx"] = beam_idx;
 }
 
 bool GgmlOvDecoder::node_is_used_as_src(const int node_idx) {
@@ -450,8 +454,8 @@ void GgmlOvDecoder::compute_model_inputs() {
             }
             continue;
         }
-        for (int i = 0; i < GGML_MAX_SRC; i++) {
-            auto * src = node->src[i];
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            auto * src = node->src[j];
             if (src == nullptr) {
                 continue;
             }
@@ -488,7 +492,13 @@ void GgmlOvDecoder::compute_model_inputs() {
                 }
             }
             ov::PartialShape param_shape = get_graph_input_shape(node, src);
-            auto param_node = std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), param_shape);
+
+            ov::element::Type param_type = get_ov_type(src);
+            if (is_inp_tok(src, node) || is_inp_pos(src, node) || is_inp_mask(src, node)) {
+                param_type = ov::element::i64;
+            }
+
+            auto param_node = std::make_shared<ov::op::v0::Parameter>(param_type, param_shape);
             param_node->set_friendly_name(src_name);
             param_node->output(0).get_tensor().set_names({src_name});
             m_model_inputs[src_name] = param_node;

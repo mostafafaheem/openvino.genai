@@ -1,4 +1,5 @@
-#include "ggml-openvino-extra.h"
+#include "ggml-openvino-extra.hpp"
+#include "../../utils.hpp"
 
 #include "ggml-impl.h"
 #include "ggml.h"
@@ -7,11 +8,6 @@
 #include <openvino/runtime/intel_gpu/ocl/ocl.hpp>
 #include <openvino/runtime/intel_npu/level_zero/level_zero.hpp>
 #include <optional>
-
-ov::Core & ov_singleton_core() {
-    static ov::Core core;
-    return core;
-}
 
 // =====================================================
 // Device Configuration Implementations
@@ -22,7 +18,7 @@ void ggml_openvino_device_config::init() {
         return;
     }
     device_name = getenv("GGML_OPENVINO_DEVICE") ? getenv("GGML_OPENVINO_DEVICE") : "CPU";
-    auto available_devices = ov_singleton_core().get_available_devices();
+    auto available_devices = ov::genai::utils::singleton_core().get_available_devices();
     if (std::find(available_devices.begin(), available_devices.end(), device_name) == available_devices.end()) {
         GGML_LOG_WARN("GGML OpenVINO Backend: device %s is not available, fallback to CPU\n", device_name.c_str());
         device_name = "CPU";
@@ -46,7 +42,7 @@ void ggml_openvino_device_config::init() {
             compile_config["NPUW_CACHE_DIR"] = cache_dir;
         }
     } else if (cache_dir) {
-        ov_singleton_core().set_property(ov::cache_dir(cache_dir));
+        ov::genai::utils::singleton_core().set_property(ov::cache_dir(cache_dir));
     }
 
     // Initialize remote context with queue sharing for GPU
@@ -81,13 +77,13 @@ void ggml_openvino_device_config::init() {
         }
 
         // Create OpenVINO remote context with queue sharing
-        remote_context = ov::intel_gpu::ocl::ClContext(ov_singleton_core(), cl_queue);
+        remote_context = ov::intel_gpu::ocl::ClContext(ov::genai::utils::singleton_core(), cl_queue);
 
         // Release the context (queue keeps a reference)
         clReleaseContext(cl_ctx);
     } else if (device_name == "NPU") {
         // remote tensor is not used for NPU yet
-        // remote_context = ov_singleton_core().get_default_context(device_name);
+        // remote_context = ov::genai::utils::singleton_core().get_default_context(device_name);
     }
 
     initialized = true;

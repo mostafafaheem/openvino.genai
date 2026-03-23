@@ -248,10 +248,10 @@ public:
 
     std::string get_graph_input_ov_name(const ggml_tensor * tensor, const ggml_tensor * op) const {
         if (is_inp_tok(tensor, op)) {
-            return m_is_stateful ? "input_ids" : "inp_tokens";
+            return "input_ids";
         }
         if (is_inp_pos(tensor, op)) {
-            return m_is_stateful ? "position_ids" : "inp_pos";
+            return "position_ids";
         }
         if (is_inp_emb(tensor, op)) {
             return "embd";
@@ -260,10 +260,7 @@ public:
             return "inp_out_ids";
         }
         if (is_inp_mask(tensor, op)) {
-            if (m_is_stateful) {
-                return "attention_mask";
-            }
-            return std::string(tensor->name).find("swa") == std::string::npos ? "self_kq_mask" : "self_kq_mask_swa";
+            return "attention_mask";
         }
         return tensor->name;
     }

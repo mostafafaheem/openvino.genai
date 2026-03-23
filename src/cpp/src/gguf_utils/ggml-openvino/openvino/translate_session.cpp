@@ -1,11 +1,12 @@
-#include "translate_session.h"
+#include "translate_session.hpp"
 
-#include "ggml-openvino/openvino/node_context.h"
-#include "ggml-openvino/openvino/utils.h"
-#include "input_model.h"
-#include "pass/eliminate_zp.h"
-#include "pass/mark_decompression_convert_constant_folding.h"
-#include "pass/squeeze_matmul.h"
+#include "node_context.hpp"
+#include "utils.hpp"
+#include "input_model.hpp"
+#include "pass/eliminate_zp.hpp"
+#include "pass/mark_decompression_convert_constant_folding.hpp"
+#include "pass/squeeze_matmul.hpp"
+#include <ggml-impl.h>
 
 #include <cstdint>
 #include <cstdlib>
@@ -19,12 +20,14 @@
 #include <openvino/op/convert_like.hpp>
 #include <openvino/op/cos.hpp>
 #include <openvino/op/divide.hpp>
+#include <openvino/op/equal.hpp>
 #include <openvino/op/gather.hpp>
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/parameter.hpp>
 #include <openvino/op/range.hpp>
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/result.hpp>
+#include <openvino/op/select.hpp>
 #include <openvino/op/sin.hpp>
 #include <openvino/op/slice.hpp>
 #include <openvino/op/squeeze.hpp>
@@ -33,7 +36,7 @@
 #include <openvino/op/unsqueeze.hpp>
 #include <openvino/pass/constant_folding.hpp>
 #include <openvino/pass/make_stateful.hpp>
-#include <openvino/core/preprocess/pre_post_process.hpp>
+#include <openvino/runtime/properties.hpp>
 
 namespace ov {
 namespace frontend {
@@ -77,7 +80,28 @@ ov::pass::MakeStateful::ParamResPairs get_kv_param_res_pairs(
     return pairs;
 }
 
-void add_sliced_mask(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
+void build_attention_mask(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
+    if (ggml_model_decoder.is_stateful() && tensor_map.find("attention_mask") != tensor_map.end()) {
+        auto param_out = tensor_map.at("attention_mask").get_node_shared_ptr();
+        
+        auto zero_i64 = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {0});
+        auto is_zero = std::make_shared<ov::op::v1::Equal>(param_out, zero_i64);
+        
+        auto penalty = ov::op::v0::Constant::create(ov::element::f32, ov::Shape{}, {-65504.0f});
+        auto zero_f32 = ov::op::v0::Constant::create(ov::element::f32, ov::Shape{}, {0.0f});
+        auto additive_mask = std::make_shared<ov::op::v1::Select>(is_zero, penalty, zero_f32);
+        
+        // Reshape {batch, seq} -> {batch, 1, 1, seq}
+        auto axes = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{2}, {1, 2});
+        std::shared_ptr<ov::Node> mask_sliced = std::make_shared<ov::op::v0::Unsqueeze>(additive_mask, axes);
+        
+        mask_sliced = std::make_shared<ov::op::v0::Convert>(mask_sliced, ov::element::f16);
+        mask_sliced->set_friendly_name("KQ_mask_sliced");
+        
+        tensor_map.insert({"KQ_mask_sliced", mask_sliced->output(0)});
+        tensor_map.insert({"KQ_mask_swa_sliced", mask_sliced->output(0)});
+        return;
+    }
 
     auto create_sliced_mask = [&](const std::string & mask_name, const std::string & sliced_name, bool is_static) {
         if ((tensor_map.find(mask_name) != tensor_map.end()) &&
@@ -142,7 +166,7 @@ void add_rope_sin_cos(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) 
 
 // Create common patterns
 void preprocess(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
-    add_sliced_mask(tensor_map, ggml_model_decoder);
+    build_attention_mask(tensor_map, ggml_model_decoder);
     add_rope_sin_cos(tensor_map, ggml_model_decoder);
 }
 
@@ -189,6 +213,43 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
         (*tensor_map)[it.first] = it.second;
     }
 
+    if (tensor_map->count("input_ids")) {
+        auto param_out = tensor_map->at("input_ids");
+        auto converted = std::make_shared<ov::op::v0::Convert>(param_out, ov::element::i32);
+        auto axes = v0::Constant::create(ov::element::i64, {2}, std::vector<int64_t>{0, 1});
+        auto unsqueezed = std::make_shared<v0::Unsqueeze>(converted, axes);
+        (*tensor_map)["input_ids"] = unsqueezed->output(0);
+    }
+    
+    // position_ids: i64 {-1, -1} → i32 {1, 1, batch, seq}
+    if (tensor_map->count("position_ids")) {
+        auto param_out = tensor_map->at("position_ids");
+        auto converted = std::make_shared<ov::op::v0::Convert>(param_out, ov::element::i32);
+        auto axes = v0::Constant::create(ov::element::i64, {2}, std::vector<int64_t>{0, 1});
+        auto unsqueezed = std::make_shared<v0::Unsqueeze>(converted, axes);
+        (*tensor_map)["position_ids"] = unsqueezed->output(0);
+    }
+    if (tensor_map->count("inp_out_ids")) {
+        auto input_ids_node = tensor_map->at("input_ids");
+        auto shape = std::make_shared<ov::op::v3::ShapeOf>(input_ids_node);
+        auto seq_len = std::make_shared<ov::op::v8::Gather>(
+            shape, 
+            v0::Constant::create(ov::element::i64, {}, {3}),
+            v0::Constant::create(ov::element::i64, {}, {0})
+        );
+        auto start = v0::Constant::create(ov::element::i32, {}, {0});
+        auto step = v0::Constant::create(ov::element::i32, {}, {1});
+        auto seq_len_i32 = std::make_shared<ov::op::v0::Convert>(seq_len, ov::element::i32);
+        auto range = std::make_shared<ov::op::v4::Range>(start, seq_len_i32, step, ov::element::i32);
+        auto reshaped_range = std::make_shared<v1::Reshape>(
+            range, 
+            v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{1, 1, 1, -1}), 
+            true
+        );
+        (*tensor_map)["inp_out_ids"] = reshaped_range->output(0);
+    }
+
+
     auto node_visitor = [&](std::shared_ptr<GgmlDecoder> decoder, int node_idx) {
         auto operation_type = decoder->get_op_type(node_idx);
         if (operation_type == "GGML_OP_NONE") {
@@ -230,13 +291,13 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
 
     ov::ParameterVector used_params;
     for (const auto & param : params) {
-        if (!param->output(0).get_target_inputs().empty()) {
+        if (!param->output(0).get_target_inputs().empty() || param->get_friendly_name() == "beam_idx") {
             used_params.push_back(param);
         }
     }
-    // if (auto diff = params.size() - used_params.size()) {
-    //     GGML_LOG_INFO("%zu parameters are not used in the model.", diff);
-    // }
+    if (auto diff = params.size() - used_params.size()) {
+        GGML_LOG_DEBUG("%zu parameters are not used in the model.", diff);
+    }
     resulting_model = std::make_shared<Model>(results, used_params);
 
     apply_transformations(resulting_model);
@@ -267,22 +328,10 @@ std::shared_ptr<Model> TranslateSession::apply_transformations(std::shared_ptr<M
             for (size_t i=0; i<output_names.size(); i++) {
                 model_output_indexes.insert(std::make_pair(output_names[i], i));
             }
-            ov::preprocess::PrePostProcessor ppp(model);
-            for (size_t i=0; i<model->get_output_size(); i++) {
-                auto output_friendly_name = model->output(i).get_node_shared_ptr()->get_friendly_name();
-                auto output_id = model_output_indexes[output_friendly_name];
-                auto model_output_shape = model->output(i).get_partial_shape();
-                auto decoder_output_shape = ggml_model_decoder->get_output_shape(output_id);
-                if (model_output_shape.rank().is_static() && decoder_output_shape.rank().is_static()
-                    && model_output_shape.rank().get_length() + 1 == decoder_output_shape.rank().get_length()
-                    && decoder_output_shape[0].is_static() && decoder_output_shape[0].get_length() == 1) {
-                    ppp.output(i).postprocess().custom([](const ov::Output<ov::Node>& node) {
-                        auto axes = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{1}, {0});
-                        return std::make_shared<ov::op::v0::Unsqueeze>(node, axes);
-                    });
-                }
-            }
-            model = ppp.build();
+            model->output(model->get_output_size() - 1).set_names({"logits"});
+
+            model->set_rt_info(ov::element::f16, {"runtime_options", ov::hint::kv_cache_precision.name()});
+            model->set_rt_info(8.0f, {"runtime_options", ov::hint::activations_scale_factor.name()});
         }
     }
     return model;

@@ -10,7 +10,7 @@
 #include "utils.hpp"
 
 #include "llama.h"
-#include "utils.h"
+#include "ggml-openvino/utils.hpp"
 
 GGUFReaderV2::GGUFReaderV2(const std::string& model_path)
     : m_model_path(model_path) {}
@@ -29,36 +29,41 @@ void GGUFReaderV2::initialize_backend_load_model() {
 
 void GGUFReaderV2::trigger_ov_model_creation() {
     auto ctx_params = llama_context_default_params();
-    ctx_params.n_threads = -1;
-    ctx_params.n_threads_batch = -1;
-    ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
 
     m_llama_ctx = llama_init_from_model(m_llama_model, ctx_params);
     if (!m_llama_ctx) {
         throw std::runtime_error(
             "GGUFReaderV2: Failed to create llama context");
     }
-    ov_set_extract_mode(true);
     const llama_vocab* vocab = llama_model_get_vocab(m_llama_model);
     llama_token dummy_token = llama_vocab_bos(vocab);
     llama_batch batch = llama_batch_get_one(&dummy_token, 1);
+    
+    ggml_backend_openvino_set_export_target(&m_extracted_model);
+    
     int rc = llama_decode(m_llama_ctx, batch);
-    ov_set_extract_mode(false);
+
+    ggml_backend_openvino_set_export_target(nullptr);
 }
 
 std::shared_ptr<ov::Model> GGUFReaderV2::extract_ov_model() {
-    auto model = ov_get_extracted_model();
-    if (!model) {
+    if (!m_extracted_model) {
         throw std::runtime_error(
             "GGUFReaderV2: No OpenVINO model was extracted during graph build. ");
     }
-    return model;
+    return m_extracted_model;
 }
 
 std::shared_ptr<ov::Model> GGUFReaderV2::convert() {
     initialize_backend_load_model();
     trigger_ov_model_creation();
-    return extract_ov_model();
+    auto extracted = extract_ov_model();
+    if (m_llama_ctx) {
+        llama_free(m_llama_ctx);
+        m_llama_ctx = nullptr;
+    }
+    llama_backend_free(); 
+    return extracted;
 }
 
 std::shared_ptr<ov::Model> create_from_gguf_v2(

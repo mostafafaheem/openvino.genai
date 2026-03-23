@@ -117,26 +117,28 @@ if(ENABLE_GGUF)
     add_library(gguflib STATIC ${gguflib_SOURCE_DIR}/fp16.c ${gguflib_SOURCE_DIR}/gguflib.c)
     set_target_properties(gguflib PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_include_directories(gguflib PUBLIC "${gguflib_SOURCE_DIR}")
+
     if(ENABLE_GGUF_V2)
         target_compile_definitions(gguflib PUBLIC gguf_get_key=gguflib_get_key) # temporary workaround for symbol collision
-    endif()
-    find_package(llama QUIET)
-    if(llama_FOUND)
-        message(STATUS "Found local llama.cpp")
-    else()
-        message(STATUS "llama.cpp not found locally, fetching from GitHub...")
         FetchContent_Declare(
             llama.cpp
-            GIT_REPOSITORY https://github.com/ravi9/llama.cpp.git
-            GIT_TAG dev_backend_openvino
+            GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
+            GIT_TAG master
             GIT_SHALLOW TRUE
         )
 
         set(LLAMA_BUILD_TESTS OFF CACHE BOOL "Disable llama.cpp tests" FORCE)
         set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "Disable llama.cpp examples" FORCE)
         set(LLAMA_BUILD_SERVER OFF CACHE BOOL "Disable llama.cpp server" FORCE)
-        set(GGML_OPENVINO ON CACHE BOOL "Enable llama.cpp OpenVINO backend" FORCE)
+        set(GGML_OPENVINO OFF CACHE BOOL "Disable internal llama.cpp OpenVINO backend" FORCE)
         FetchContent_MakeAvailable(llama.cpp)
+        set_target_properties(llama ggml PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        set_target_properties(ggml-base PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        set_target_properties(ggml-cpu PROPERTIES POSITION_INDEPENDENT_CODE ON)
+        # Force the registration code to be enabled in llama.cpp's registry
+        # This will cause an undefined reference to ggml_backend_openvino_reg() 
+        # which the local implementation will satisfy at link time.
+        target_compile_definitions(ggml PUBLIC GGML_USE_OPENVINO)
     endif()
 endif()
 
@@ -199,6 +201,9 @@ configure_file("${OpenVINOGenAI_SOURCE_DIR}/cmake/templates/version.cpp.in"
                "${CMAKE_CURRENT_BINARY_DIR}/version.cpp" @ONLY)
 
 # Object library
+
+file(GLOB_RECURSE GGML_OPENVINO_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/gguf_utils/ggml-openvino/*.cpp")
+
 if(NOT ENABLE_GGUF)
     set(GGUF_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/gguf_utils/gguf.cpp
                      ${CMAKE_CURRENT_SOURCE_DIR}/src/gguf_utils/gguf_quants.cpp
@@ -206,9 +211,11 @@ if(NOT ENABLE_GGUF)
                      ${CMAKE_CURRENT_SOURCE_DIR}/src/gguf_utils/building_blocks.cpp
                      ${CMAKE_CURRENT_SOURCE_DIR}/src/gguf_utils/gguf_dynamic_reader.cpp)
     list(REMOVE_ITEM SOURCE_FILES ${GGUF_SOURCES})
+    list(REMOVE_ITEM SOURCE_FILES ${GGML_OPENVINO_SOURCES})
 elseif(NOT ENABLE_GGUF_V2)
     set(GGUF_V2_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/gguf_utils/gguf_dynamic_reader.cpp)
     list(REMOVE_ITEM SOURCE_FILES ${GGUF_V2_SOURCES})
+    list(REMOVE_ITEM SOURCE_FILES ${GGML_OPENVINO_SOURCES})
 endif()
 
 set(TARGET_NAME openvino_genai)
@@ -227,21 +234,17 @@ endif()
 
 if(ENABLE_GGUF)
     target_link_libraries(${TARGET_NAME_OBJ} PRIVATE gguflib)
+    target_compile_definitions(${TARGET_NAME_OBJ} PRIVATE ENABLE_GGUF)
+
     if(ENABLE_GGUF_V2)
         target_link_libraries(${TARGET_NAME_OBJ} PRIVATE llama)
-    endif()
-    target_compile_definitions(${TARGET_NAME_OBJ} PRIVATE ENABLE_GGUF)
-    if(ENABLE_GGUF_V2)
         target_compile_definitions(${TARGET_NAME_OBJ} PRIVATE ENABLE_GGUF_V2)
         set(LLAMA_SRC_DIR "${llama.cpp_SOURCE_DIR}")
-        if(NOT LLAMA_SRC_DIR)
-            set(LLAMA_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../llama.cpp") # temporary fallback path for local development
-        endif()
         
         target_include_directories(${TARGET_NAME_OBJ} SYSTEM PRIVATE
-            "${LLAMA_SRC_DIR}/ggml/src" # for ggml-openvino/utils.h, ggml-decoder.h
-            "${LLAMA_SRC_DIR}/ggml/src/ggml-openvino" # for direct includes within OV backend
-            "${LLAMA_SRC_DIR}/include" # for llama.h public API
+            "${LLAMA_SRC_DIR}/ggml/include" # for ggml.h, ggml-backend.h, ggml-openvino.h
+            "${LLAMA_SRC_DIR}/ggml/src"     # for ggml-impl.h, ggml-backend-impl.h, ggml-common.h
+            "${LLAMA_SRC_DIR}/include"      # for llama.h public API
         )
     endif()
 endif()
